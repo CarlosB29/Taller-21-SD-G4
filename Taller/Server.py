@@ -1,91 +1,100 @@
 import socket
 import pickle
+from datetime import datetime
 import time
-from concurrent.futures import ThreadPoolExecutor
+from Producto import Producto  # Ajusta el nombre de importación
 
-class Server:
-    def __init__(self, server_port, iva_port, suma_port):
-        self.server_port = server_port
-        self.iva_port = iva_port
-        self.suma_port = suma_port
+def calcular_total(productos):
+    total = 0
+    for producto in productos:
+        total += producto.precio
+    return total
 
-    def main(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-            server_socket.bind(("localhost", self.server_port))
-            server_socket.listen()
+def connect_to_suma_node(productos_con_iva):
+    suma_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    suma_socket.settimeout(20)  # Tiempo de espera de 20 segundos
 
-            print(f"Esperando conexiones en el puerto {self.server_port}")
+    try:
+        suma_socket.connect(('localhost', 8890))
+        suma_socket.sendall(pickle.dumps(productos_con_iva))
 
-            while True:
-                client_socket, client_address = server_socket.accept()
-                print(f"Conexión aceptada desde {client_address}")
+        total_pagar_data = suma_socket.recv(4096)
+        total_pagar = pickle.loads(total_pagar_data)
 
-                try:
-                    self.handle_client(client_socket)
-                except Exception as e:
-                    print(f"Error al manejar la conexión del cliente: {e}")
-                finally:
-                    client_socket.close()
+        suma_socket.close()
+        return total_pagar
+    except ConnectionRefusedError:
+        print("No se pudo conectar al nodo Suma. Calculando total localmente...")
+        suma_socket.close()
+        return calcular_total(productos_con_iva)
+    except socket.timeout:
+        print("Tiempo de espera agotado al intentar conectar al nodo Suma. Calculando total localmente...")
+        suma_socket.close()
+        return calcular_total(productos_con_iva)
 
-    def handle_client(self, client_socket):
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                productos = pickle.loads(client_socket.recv(1024))
 
-                future = executor.submit(self.process_productos, productos)
+def connect_to_iva_node(productos):
+    iva_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    iva_socket.settimeout(20)  # Tiempo de espera de 20 segundos
 
-                try:
-                    productos_con_iva = future.result(timeout=10)
-                except Exception as timeout_exception:
-                    print(f"Tiempo de espera agotado para la conexión con IvaNode. Aplicando IVA localmente.")
-                    productos_con_iva = self.apply_local_iva(productos)
+    try:
+        iva_socket.connect(('localhost', 8889))
+        iva_socket.sendall(pickle.dumps(productos))
 
-                suma_precios = sum(producto['precio'] for producto in productos_con_iva)
+        productos_con_iva_data = iva_socket.recv(4096)
+        productos_con_iva = pickle.loads(productos_con_iva_data)
 
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as suma_socket:
-                    suma_socket.connect(("localhost", self.suma_port))
-                    suma_socket.sendall(str(suma_precios).encode())
-
-                    suma_calculada = suma_socket.recv(1024)
-                    suma_socket.close()
-
-                client_socket.sendall(str(float(suma_calculada)).encode())
-
-        except Exception as e:
-            print(f"Error al manejar la conexión del cliente: {e}")
-
-    def process_productos(self, productos):
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            futures = [executor.submit(self.connect_to_iva_node, producto) for producto in productos]
-
-            productos_con_iva = []
-            for future in futures:
-                try:
-                    producto_con_iva = future.result()
-                    productos_con_iva.append(producto_con_iva)
-                except Exception as e:
-                    print(f"Error al procesar producto con IvaNode: {e}")
-
-            return productos_con_iva
-
-    def connect_to_iva_node(self, producto):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as iva_socket:
-                iva_socket.connect(("localhost", self.iva_port))
-                iva_socket.sendall(pickle.dumps(producto))
-
-                producto_con_iva = pickle.loads(iva_socket.recv(1024))
-                return producto_con_iva
-
-        except Exception as e:
-            print(f"No se pudo conectar a IvaNode. Aplicando IVA localmente: {e}")
-            return self.apply_local_iva([producto])[0]
-
-    def apply_local_iva(self, productos):
+        iva_socket.close()
+        return productos_con_iva
+    except ConnectionRefusedError:
+        print("No se pudo conectar al IvaNode. Aplicando IVA localmente...")
+        iva_socket.close()
+        # Aplicar el IVA localmente antes de retornar
         for producto in productos:
-            producto['precio'] *= 1.19
+            if producto.categoria.lower() != "canasta":
+                producto.precio *= 1.19  # Aplica un 19% de impuestos
+        return productos
+    except socket.timeout:
+        print("Tiempo de espera agotado al intentar conectar al IvaNode. Aplicando IVA localmente...")
+        iva_socket.close()
+        # Aplicar el IVA localmente antes de retornar
+        for producto in productos:
+            if producto.categoria.lower() != "canasta":
+                producto.precio *= 1.19  # Aplica un 19% de impuestos
         return productos
 
+
+def main():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind(('localhost', 8891))
+    server_socket.listen(1)
+
+    print("Servidor en espera de conexiones...")
+
+    while True:
+        client_socket, addr = server_socket.accept()
+        print(f"Conexión establecida desde {addr}")
+
+        productos_data = client_socket.recv(4096)
+        productos = pickle.loads(productos_data)
+
+        fecha_hora_conexion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\nFecha y hora de conexión: {fecha_hora_conexion}")
+
+        print("\nLista de productos recibida:")
+        for producto in productos:
+            print(f"{producto.nombre} - {producto.categoria} - ${producto.precio:.2f}")
+
+        productos_con_iva = connect_to_iva_node(productos)
+
+        print("\nCalculando total a pagar con IVA...")
+        total_pagar = connect_to_suma_node(productos_con_iva)
+        print(f"Total a pagar con IVA: ${total_pagar:.2f}")
+
+        client_socket.sendall(str(total_pagar).encode())
+        client_socket.close()
+
+        print("Servidor en espera de conexiones...")
+
 if __name__ == "__main__":
-    server = Server(12345, 12346, 12347)
-    server.main()
+    main()

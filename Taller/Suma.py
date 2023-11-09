@@ -1,24 +1,37 @@
 import socket
+import pickle
 
-def calcular_suma(suma_precios):
-    return suma_precios
+def calcular_total_con_iva(productos_con_iva):
+    total_pagar = sum(producto.precio for producto in productos_con_iva)
+    return total_pagar
 
-def handle_client(client_socket):
-    try:
-        suma_precios = float(client_socket.recv(1024).decode())
-        suma_calculada = calcular_suma(suma_precios)
+def main():
+    suma_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    suma_socket.bind(('localhost', 8890))
+    suma_socket.listen(1)
 
-        client_socket.send(str(suma_calculada).encode())
-
-    except Exception as e:
-        print("Error:", e)
-
-if __name__ == "__main__":
-    suma_port = 12347
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(("localhost", suma_port))
-    server_socket.listen(5)
+    print("Nodo Suma en espera de conexiones...")
 
     while True:
-        client_socket, _ = server_socket.accept()
-        handle_client(client_socket)
+        server_socket, addr = suma_socket.accept()
+        print(f"Conexión establecida desde {addr}")
+
+        productos_con_iva_data = server_socket.recv(4096)
+        productos_con_iva = pickle.loads(productos_con_iva_data)
+
+        print("\nLista de productos con IVA recibida por el nodo Suma:")
+        for producto in productos_con_iva:
+            print(f"{producto.nombre} - {producto.categoria} - ${producto.precio:.2f}")
+
+        total_pagar = calcular_total_con_iva(productos_con_iva)
+
+        print("\nCalculando total a pagar con IVA en el nodo Suma...")
+        print(f"Total a pagar con IVA: ${total_pagar:.2f}")
+
+        server_socket.sendall(pickle.dumps(total_pagar))
+        server_socket.close()
+
+        print("Nodo Suma en espera de conexiones...")
+
+if __name__ == "__main__":
+    main()
