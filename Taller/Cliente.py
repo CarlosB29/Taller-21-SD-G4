@@ -1,44 +1,55 @@
-import socket
-import pickle
-from datetime import datetime
-from Producto import Producto  # Ajusta el nombre de importación
+import zmq
 
-def crear_lista_productos():
+def cliente():
+    context = zmq.Context()
+    socket = context.socket(zmq.REQ)
+    socket.connect("tcp://localhost:5559")
+
+    # Crear lista de productos
     productos = []
-    cantidad = int(input("Ingrese la cantidad de productos que desea agregar: "))
-    for _ in range(cantidad):
-        nombre = input("Nombre del producto: ")
-        categoria = input("Categoría del producto: ")
-        precio = float(input("Precio del producto: "))
-        productos.append(Producto(nombre, categoria, precio))
-    return productos
+    while True:
+        nombre = input("Ingrese nombre del producto (o 'fin' para terminar): ")
+        if nombre.lower() == 'fin':
+            break
+        categoria = input("Ingrese la categoría del producto: ")
+        precio = float(input("Ingrese el precio del producto: "))
 
-def main():
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.settimeout(20)
-    try:
-        # Intenta conectarse al nodo servidor
-        client_socket.connect(('localhost', 8891)) #8891
-    except socket.timeout:
-        # Si hay un timeout, imprime el mensaje
+        productos.append({'nombre': nombre, 'categoria': categoria, 'precio': precio})
 
-        print("No se pudo conectar al servidor en 20 segundos. Conectándose a CopiaServer...")
+    # Enviar lista de productos al servidor
+    socket.send_pyobj(productos)
 
-        # Intenta conectarse al nodo copia (CopiaServer)
-        client_socket.close()
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect(('localhost', 8891))  # 9002
+    # Recibir el total a pagar desde el servidor
+    total = socket.recv_pyobj()
 
-    lista_productos = crear_lista_productos()
-    productos_data = pickle.dumps(lista_productos)
-    client_socket.sendall(productos_data)
+    # Preguntar la edad al usuario
+    edad = int(input("¿Cuántos años tienes? "))
 
-    total_pagar = client_socket.recv(4096).decode()
+    # Si la edad es mayor a 60, solicitar descuento
+    if edad > 60:
+        print(f"El total a pagar es: ${total:.2f}")
+        descuento = input("¿Desea aplicar el descuento? (si/no): ").lower() == "si"
 
-    client_socket.close()
+        if descuento:
+            descuento_socket = context.socket(zmq.REQ)
+            descuento_socket.connect("tcp://localhost:5590")
 
-    print("\nTotal a pagar recibido del servidor o CopiaServer:")
-    print(f"${float(total_pagar):.2f}")
+            # Enviar el total y la edad al nodo de descuento
+            descuento_socket.send_pyobj((total, edad))
+
+            # Recibir el total con descuento y la lista de premios
+            total_con_descuento, premios = descuento_socket.recv_pyobj()
+
+            print(f"Total con descuento: ${total_con_descuento:.2f}")
+
+            if premios:
+                print("Lista de premios:")
+                for premio in premios:
+                    print(premio)
+        else:
+            print("No se aplicará el descuento.")
+    else:
+        print(f"El total a pagar es: ${total:.2f}")
 
 if __name__ == "__main__":
-    main()
+    cliente()

@@ -1,42 +1,32 @@
-import socket
-import pickle
-from datetime import datetime
-from Producto import Producto  # Ajusta el nombre de importación
+import zmq
+import time
 
-def aplicar_iva(productos):
-    for producto in productos:
-        if producto.categoria.lower() != "canasta":
-            producto.precio *= 1.19  # Aplica un 19% de impuestos
-    return productos
+def iva_node():
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    socket.bind("tcp://*:5570")
 
-def main():
-    iva_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    iva_socket.bind(('localhost', 8889))
-    iva_socket.listen(1)
-
-    print("IvaNode en espera de conexiones...")
-
+    # Ciclo principal del IvaNode
     while True:
-        server_socket, addr = iva_socket.accept()
-        print(f"Conexión establecida desde {addr}")
+        try:
+            # Recibir la lista de productos del servidor
+            message = socket.recv_pyobj()
 
-        productos_data = server_socket.recv(4096)
-        productos = pickle.loads(productos_data)
+            # Aplicar el IVA a los productos según la categoría
+            for producto in message:
+                if producto['categoria'] != 'Canasta':
+                    producto['precio'] *= 1.19
 
-        print("\nLista de productos recibida por IvaNode:")
-        for producto in productos:
-            print(f"{producto.nombre} - {producto.categoria} - ${producto.precio:.2f}")
+            # Mostrar la nueva lista con el IVA
+            print("\nNueva lista con IVA aplicado en IvaNode:")
+            for producto in message:
+                print(producto)
 
-        productos_con_iva = aplicar_iva(productos)
+            # Enviar la lista con IVA al servidor
+            socket.send_pyobj(message)
 
-        print("\nAplicando IVA...")
-        for producto in productos_con_iva:
-            print(f"{producto.nombre} - {producto.categoria} - ${producto.precio:.2f}")
-
-        server_socket.sendall(pickle.dumps(productos_con_iva))
-        server_socket.close()
-
-        print("IvaNode en espera de conexiones...")
+        except zmq.ContextTerminated:
+            break
 
 if __name__ == "__main__":
-    main()
+    iva_node()

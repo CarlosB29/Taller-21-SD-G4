@@ -1,100 +1,78 @@
-import socket
-import pickle
-from datetime import datetime
+import zmq
 import time
-from Producto import Producto  # Ajusta el nombre de importación
+import logging
 
-def calcular_total(productos):
-    total = 0
-    for producto in productos:
-        total += producto.precio
-    return total
+# Configuración básica de logging
+logging.basicConfig(level=logging.INFO)
 
-def connect_to_suma_node(productos_con_iva):
-    suma_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    suma_socket.settimeout(20)  # Tiempo de espera de 20 segundos
+def server():
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    socket.connect("tcp://localhost:5560")
+    logging.info("Servidor esperando un publicador...")
 
-    try:
-        suma_socket.connect(('localhost', 8890))
-        suma_socket.sendall(pickle.dumps(productos_con_iva))
-
-        total_pagar_data = suma_socket.recv(4096)
-        total_pagar = pickle.loads(total_pagar_data)
-
-        suma_socket.close()
-        return total_pagar
-    except ConnectionRefusedError:
-        print("No se pudo conectar al nodo Suma. Calculando total localmente...")
-        suma_socket.close()
-        return calcular_total(productos_con_iva)
-    except socket.timeout:
-        print("Tiempo de espera agotado al intentar conectar al nodo Suma. Calculando total localmente...")
-        suma_socket.close()
-        return calcular_total(productos_con_iva)
-
-
-def connect_to_iva_node(productos):
-    iva_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    iva_socket.settimeout(20)  # Tiempo de espera de 20 segundos
-
-    try:
-        iva_socket.connect(('localhost', 8889))
-        iva_socket.sendall(pickle.dumps(productos))
-
-        productos_con_iva_data = iva_socket.recv(4096)
-        productos_con_iva = pickle.loads(productos_con_iva_data)
-
-        iva_socket.close()
-        return productos_con_iva
-    except ConnectionRefusedError:
-        print("No se pudo conectar al IvaNode. Aplicando IVA localmente...")
-        iva_socket.close()
-        # Aplicar el IVA localmente antes de retornar
-        for producto in productos:
-            if producto.categoria.lower() != "canasta":
-                producto.precio *= 1.19  # Aplica un 19% de impuestos
-        return productos
-    except socket.timeout:
-        print("Tiempo de espera agotado al intentar conectar al IvaNode. Aplicando IVA localmente...")
-        iva_socket.close()
-        # Aplicar el IVA localmente antes de retornar
-        for producto in productos:
-            if producto.categoria.lower() != "canasta":
-                producto.precio *= 1.19  # Aplica un 19% de impuestos
-        return productos
-
-
-def main():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('localhost', 8891))
-    server_socket.listen(1)
-
-    print("Servidor en espera de conexiones...")
-
+    # Ciclo principal del servidor
     while True:
-        client_socket, addr = server_socket.accept()
-        print(f"Conexión establecida desde {addr}")
+        iva_socket = context.socket(zmq.REQ)
+        suma_socket = context.socket(zmq.REQ)
 
-        productos_data = client_socket.recv(4096)
-        productos = pickle.loads(productos_data)
+        try:
+            iva_socket.connect("tcp://localhost:5570")
+            suma_socket.connect("tcp://localhost:5580")
 
-        fecha_hora_conexion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\nFecha y hora de conexión: {fecha_hora_conexion}")
+            # Recibir la lista de productos desde el cliente
+            message = socket.recv_pyobj()
 
-        print("\nLista de productos recibida:")
-        for producto in productos:
-            print(f"{producto.nombre} - {producto.categoria} - ${producto.precio:.2f}")
+            # Mostrar la lista original
+            logging.info("Lista de productos recibida:")
+            for producto in message:
+                logging.info(producto)
 
-        productos_con_iva = connect_to_iva_node(productos)
+            # Intentar aplicar el IVA con IvaNode
+            try:
+                iva_socket.send_pyobj(message)
+                iva_response = iva_socket.recv_pyobj()
+            except zmq.Again:
+                logging.warning("No se pudo conectar con IvaNode. Aplicando IVA localmente...")
+                iva_response = message
+                for producto in iva_response:
+                    if producto['categoria'] != 'Canasta':
+                        producto['precio'] *= 1.19
 
-        print("\nCalculando total a pagar con IVA...")
-        total_pagar = connect_to_suma_node(productos_con_iva)
-        print(f"Total a pagar con IVA: ${total_pagar:.2f}")
+            # Mostrar la nueva lista con el IVA
+            logging.info("\nNueva lista con IVA aplicado:")
+            for producto in iva_response:
+                logging.info(producto)
 
-        client_socket.sendall(str(total_pagar).encode())
-        client_socket.close()
+            # Intentar realizar la suma con SumaNode
+            try:
+                suma_socket.send_pyobj(iva_response)
+                total_response = suma_socket.recv_pyobj()
+            except zmq.Again:
+                logging.warning("No se pudo conectar con SumaNode. Realizando la suma localmente...")
+                total_response = sum([producto['precio'] for producto in iva_response])
 
-        print("Servidor en espera de conexiones...")
+            # Mostrar el total a pagar
+            logging.info(f"\nTotal a pagar (con suma): ${total_response}")
+
+            # Enviar el total al cliente
+            socket.send_pyobj(total_response)
+
+            logging.info("Servidor esperando un publicador...")
+
+        except Exception as e:
+            logging.error(f"Error en el servidor: {e}")
+
+        finally:
+            # Cerrar sockets
+            try:
+                iva_socket.close()
+                suma_socket.close()
+            except zmq.error.ZMQError as e:
+                logging.error(f"Error al cerrar sockets: {e}")
+
+        # Esperar 10 segundos antes de intentar nuevamente la conexión
+        time.sleep(10)
 
 if __name__ == "__main__":
-    main()
+    server()
