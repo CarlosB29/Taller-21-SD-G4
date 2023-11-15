@@ -2,6 +2,7 @@ import zmq
 import time
 
 def iva_node():
+    #Se crea un contexto de ZeroMQ y se vincula un socket REP al puerto 5570 para recibir mensajes del servidor.
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.bind("tcp://*:5570")
@@ -24,7 +25,7 @@ def iva_node():
 
             # Enviar la lista con IVA al servidor
             socket.send_pyobj(message)
-
+#En caso de que el contexto de ZeroMQ se termine, se sale del bucle.
         except zmq.ContextTerminated:
             break
 

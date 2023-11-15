@@ -1,6 +1,7 @@
 import zmq
 
 def suma_node():
+    #Se crea un contexto de ZeroMQ y se vincula un socket REP al puerto 5580 para recibir mensajes del servidor.
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.bind("tcp://*:5580")
@@ -20,6 +21,7 @@ def suma_node():
             # Enviar el total al servidor
             socket.send_pyobj(total_response)
         except zmq.ContextTerminated:
+            #En caso de que el contexto de ZeroMQ se termine, se sale del bucle.
             break
 
 if __name__ == "__main__":

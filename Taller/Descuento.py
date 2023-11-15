@@ -1,6 +1,7 @@
 import zmq
 
 def descuento():
+    #Se crea un contexto de ZeroMQ y se vincula un socket REP al puerto 5690 para recibir mensajes del broker.
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.bind("tcp://*:5690")

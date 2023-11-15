@@ -1,5 +1,5 @@
-import zmq
-import time
+import zmq # libreria para utilizar el middleware ZeroMQ
+import time # Libreria para utilizar el tiempo de espera
 import logging
 
 # Configuración básica de logging
@@ -8,16 +8,19 @@ logging.basicConfig(level=logging.INFO)
 def server():
     context = zmq.Context()
     socket = context.socket(zmq.REP)
-    socket.connect("tcp://localhost:5560")
+    socket.connect("tcp://localhost:5560")# coneccion al nodo broker a traves del socket REP
     logging.info("Servidor esperando un publicador...")
 
     # Ciclo principal del servidor
     while True:
+        #Se crean sockets REQ (Request) para la comunicación con nodos especializados en IVA y suma.
         iva_socket = context.socket(zmq.REQ)
         suma_socket = context.socket(zmq.REQ)
 
         try:
+            #Se establece la conexión con el nodo de IVA
             iva_socket.connect("tcp://localhost:5570")
+            #Se establece la conexión con el nodo Suma
             suma_socket.connect("tcp://localhost:5580")
 
             # Recibir la lista de productos desde el cliente
@@ -30,6 +33,8 @@ def server():
 
             # Intentar aplicar el IVA con IvaNode
             try:
+                #Se intenta conectar con un nodo de IVA (IvaNode) para aplicar el IVA. Si no se puede conectar,
+                # se aplica el IVA localmente a aquellos productos que no pertenecen a la categoría 'Canasta'.
                 iva_socket.send_pyobj(message)
                 iva_response = iva_socket.recv_pyobj()
             except zmq.Again:
@@ -61,6 +66,7 @@ def server():
             logging.info("Servidor esperando un publicador...")
 
         except Exception as e:
+
             logging.error(f"Error en el servidor: {e}")
 
         finally:
